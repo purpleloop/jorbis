@@ -4,3 +4,6 @@ project/target/
 target/
 *~
 *.zip
+/.project
+/.settings/
+/.classpath

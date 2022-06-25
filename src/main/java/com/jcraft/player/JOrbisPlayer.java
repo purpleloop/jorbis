@@ -1,3 +1,5 @@
+package com.jcraft.player;
+
 /* -*-mode:java; c-basic-offset:2; indent-tabs-mode:nil -*- */
 /* JOrbisPlayer -- pure Java Ogg Vorbis player
  *

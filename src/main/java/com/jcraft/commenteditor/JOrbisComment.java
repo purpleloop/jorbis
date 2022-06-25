@@ -1,3 +1,5 @@
+package com.jcraft.commenteditor;
+
 /* JOrbisComment -- pure Java Ogg Vorbis Comment Editor
  *
  * Copyright (C) 2000 ymnk, JCraft,Inc.
