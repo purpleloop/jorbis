@@ -28,32 +28,21 @@ package com.jcraft.player;
  * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
-import java.awt.BorderLayout;
-import java.awt.Color;
-import java.awt.event.ActionEvent;
-import java.awt.event.ActionListener;
-import java.awt.event.WindowAdapter;
-import java.awt.event.WindowEvent;
-import java.io.BufferedReader;
 import java.io.FileInputStream;
 import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.net.DatagramPacket;
-import java.net.DatagramSocket;
-import java.net.InetAddress;
 import java.net.URL;
 import java.net.URLConnection;
-import java.util.Vector;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
 
 import javax.sound.sampled.AudioFormat;
 import javax.sound.sampled.AudioSystem;
 import javax.sound.sampled.DataLine;
 import javax.sound.sampled.LineUnavailableException;
 import javax.sound.sampled.SourceDataLine;
-import javax.swing.JButton;
-import javax.swing.JComboBox;
-import javax.swing.JFrame;
-import javax.swing.JPanel;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -68,7 +57,7 @@ import com.jcraft.jorbis.DspState;
 import com.jcraft.jorbis.Info;
 
 /** JOrbis player. */
-public class JOrbisPlayer implements ActionListener, Runnable {
+public class JOrbisPlayer implements Runnable {
 
     /** Sample size, in bits. */
     private static final int SAMPLE_SIZE_IN_BITS = 16;
@@ -91,12 +80,8 @@ public class JOrbisPlayer implements ActionListener, Runnable {
     /** The sound bit stream. */
     private InputStream soundBitStream = null;
 
+    /** UDP port for streaming. */
     int udpPort = -1;
-    String udpBaddress = null;
-
-    String playlistfile = "playlist";
-
-    boolean icestats = false;
 
     private SyncState syncState;
     private StreamState streamState;
@@ -110,28 +95,21 @@ public class JOrbisPlayer implements ActionListener, Runnable {
     private byte[] buffer = null;
     private int bytes = 0;
 
-    private int format;
     private int rate = 0;
     private int channels = 0;
-    private int leftVolScale = 100;
-    private int rightVolScale = 100;
+
     private SourceDataLine outputLine = null;
-    private String currentSource = null;
 
-    private int frameSizeInBytes;
-    private int bufferLengthInBytes;
+    /** Context of the player. */
+    private JOrbisPlayerContext playerContext;
 
-    private boolean playOnStartup = false;
-    
-    private Vector playlist = new Vector();
-
-    private JPanel panel;
-    private JComboBox cb;
-    private JButton startButton;
-    private JButton statsButton;
-
-    /** Constructor of the player. */
-    public JOrbisPlayer() {
+    /**
+     * Constructor of the player.
+     * 
+     * @param playerContext the player context
+     */
+    public JOrbisPlayer(JOrbisPlayerContext playerContext) {
+        this.playerContext = playerContext;
     }
 
     /** Initializes JOrbis fields. */
@@ -184,13 +162,8 @@ public class JOrbisPlayer implements ActionListener, Runnable {
                 return;
             }
 
-            outputLine = (SourceDataLine) AudioSystem.getLine(lineInfo);
-            outputLine.open(audioFormat);
-
-            frameSizeInBytes = audioFormat.getFrameSize();
-            int bufferLengthInFrames = outputLine.getBufferSize() / frameSizeInBytes / 2;
-            bufferLengthInBytes = bufferLengthInFrames * frameSizeInBytes;
-
+            this.outputLine = (SourceDataLine) AudioSystem.getLine(lineInfo);
+            this.outputLine.open(audioFormat);
             this.rate = sampleRate;
             this.channels = channels;
 
@@ -203,51 +176,42 @@ public class JOrbisPlayer implements ActionListener, Runnable {
         }
     }
 
-    private int item2index(String item) {
-        for (int i = 0; i < cb.getItemCount(); i++) {
-            String foo = (String) (cb.getItemAt(i));
-            if (item.equals(foo)) {
-                return i;
-            }
-        }
-        cb.addItem(item);
-        return cb.getItemCount() - 1;
-    }
-
     public void run() {
+
         Thread localThread = Thread.currentThread();
+        LOG.debug("Player thread started {}", localThread.getId());
 
-        String item = (String) (cb.getSelectedItem());
-        int currentIndex = item2index(item);
+        // Playing items of the playlist in loop
+        while ((activePlayerThread == localThread) && (playerContext.getItemCount() > 0)) {
 
-        while (true) {
-            
-            item = (String) (cb.getItemAt(currentIndex));
-            cb.setSelectedIndex(currentIndex);
-            soundBitStream = selectSource(item);
+            String playlistItem = playerContext.getCurrentItem();
+            soundBitStream = selectSource(playlistItem);
+
             if (soundBitStream != null) {
+
+                // We have an usable sound steam to play
                 if (udpPort != -1) {
                     playUdpStream(localThread);
                 } else {
                     playStream(localThread);
                 }
-            } else if (cb.getItemCount() == 1) {
-                break;
-            }
-            if (activePlayerThread != localThread) {
-                break;
-            }
+
+                LOG.debug("Playing of {} finished", playlistItem);
+
+            } 
+
             soundBitStream = null;
-            currentIndex++;
-            if (currentIndex >= cb.getItemCount()) {
-                currentIndex = 0;
+            
+            // If this thread is still active, select next item in list
+            if (activePlayerThread == localThread) {
+                playerContext.next();
             }
-            if (cb.getItemCount() <= 0) {
-                break;
-            }
+            
         }
+
+        LOG.debug("Play loop terminated, handling end");
         activePlayerThread = null;
-        startButton.setText("start");
+        playerContext.handleEndOfPlay();
     }
 
     /**
@@ -353,27 +317,15 @@ public class JOrbisPlayer implements ActionListener, Runnable {
                 syncState.wrote(bytes);
             }
 
-            {
-                byte[][] ptr = comment.user_comments;
-                for (int j = 0; j < ptr.length; j++) {
-                    if (ptr[j] == null) {
-                        break;
-                    }
-                    LOG.info("Comment: " + new String(ptr[j], 0, ptr[j].length - 1));
-
-                }
-                LOG.info("Bitstream is " + info.channels + " channel, " + info.rate + "Hz");
-                LOG.info("Encoded by: " + new String(comment.vendor, 0, comment.vendor.length - 1)
-                        + "\n");
-            }
+            handleMetaInfo();
 
             conversionBufferSize = BUFFER_SIZE / info.channels;
 
             dspState.synthesis_init(info);
             block.init(dspState);
 
-            float[][][] _pcmf = new float[1][][];
-            int[] _index = new int[info.channels];
+            float[][][] pcmf2 = new float[1][][];
+            int[] index2 = new int[info.channels];
 
             getOutputLine(info.channels, info.rate);
 
@@ -423,42 +375,7 @@ public class JOrbisPlayer implements ActionListener, Runnable {
                                 // LOG.error("no reason to complain;
                                 // already complained above");
                             } else {
-                                // we have a packet. Decode it
-                                int samples;
-                                if (block.synthesis(packet) == 0) {
-                                    // test for success!
-                                    dspState.synthesis_blockin(block);
-                                }
-                                while ((samples = dspState.synthesis_pcmout(_pcmf, _index)) > 0) {
-                                    float[][] pcmf = _pcmf[0];
-                                    int bout = (samples < conversionBufferSize ? samples
-                                            : conversionBufferSize);
-
-                                    // convert doubles to 16 bit signed ints
-                                    // (host order) and
-                                    // interleave
-                                    for (i = 0; i < info.channels; i++) {
-                                        int ptr = i * 2;
-                                        // int ptr=i;
-                                        int mono = _index[i];
-                                        for (int j = 0; j < bout; j++) {
-                                            int val = (int) (pcmf[i][mono + j] * 32767.);
-                                            if (val > 32767) {
-                                                val = 32767;
-                                            }
-                                            if (val < -32768) {
-                                                val = -32768;
-                                            }
-                                            if (val < 0)
-                                                val = val | 0x8000;
-                                            conversionBuffer[ptr] = (byte) (val);
-                                            conversionBuffer[ptr + 1] = (byte) (val >>> 8);
-                                            ptr += 2 * (info.channels);
-                                        }
-                                    }
-                                    outputLine.write(conversionBuffer, 0, 2 * info.channels * bout);
-                                    dspState.synthesis_read(bout);
-                                }
+                                decodePacket(pcmf2, index2);
                             }
                         }
                         if (page.eos() != 0) {
@@ -502,6 +419,100 @@ public class JOrbisPlayer implements ActionListener, Runnable {
         }
     }
 
+    /** Handle meta informations. */
+    private void handleMetaInfo() {
+
+        byte[][] userCommentsData = comment.user_comments;
+
+        Map<String, String> infos = new HashMap<>();
+
+        List<String> commentLines = new ArrayList<>();
+
+        byte[] commentByteBuffer;
+
+        for (int commentIndex = 0; commentIndex < userCommentsData.length; commentIndex++) {
+            commentByteBuffer = userCommentsData[commentIndex];
+            if (commentByteBuffer != null) {
+
+                String line = new String(commentByteBuffer, 0, commentByteBuffer.length - 1);
+
+                int pos = line.indexOf('=');
+                if (pos != -1) {
+                    infos.put(line.substring(0, pos), line.substring(pos + 1));
+                } else {
+                    commentLines.add(line);
+                }
+            }
+        }
+
+        infos.put("Bitstream channels", Integer.toString(info.channels));
+        infos.put("Bitstream rate (Hz)", Integer.toString(info.rate));
+        infos.put("Encoded by", new String(comment.vendor, 0, comment.vendor.length - 1));
+
+        for (Entry<String, String> entry : infos.entrySet()) {
+            LOG.info("{} : {}", entry.getKey(), entry.getValue());
+        }
+
+        LOG.info("Comments: ");
+        for (String commentLine : commentLines) {
+            LOG.info(" - {}", commentLine);
+        }
+
+    }
+
+    /** Decode a packet. */
+    private void decodePacket(float[][][] pcmf2, int[] index2) {
+
+        if (block.synthesis(packet) == 0) {
+            // test for success!
+            dspState.synthesis_blockin(block);
+        }
+
+        int sampleSize;
+        while ((sampleSize = dspState.synthesis_pcmout(pcmf2, index2)) > 0) {
+            float[][] pcmf = pcmf2[0];
+            int bufferOutputSize = (sampleSize < conversionBufferSize ? sampleSize
+                    : conversionBufferSize);
+
+            // convert doubles to 16 bit signed ints (host order) and
+            // interleave
+            for (int channelIndex = 0; channelIndex < info.channels; channelIndex++) {
+                int bufferPosition = channelIndex * 2;
+
+                int mono = index2[channelIndex];
+                for (int j = 0; j < bufferOutputSize; j++) {
+                    int val16BitsSigned = floatTo16BitsSignedInt(pcmf[channelIndex][mono + j]);
+                    conversionBuffer[bufferPosition] = (byte) (val16BitsSigned);
+                    conversionBuffer[bufferPosition + 1] = (byte) (val16BitsSigned >>> 8);
+                    bufferPosition += 2 * (info.channels);
+                }
+            }
+            outputLine.write(conversionBuffer, 0, 2 * info.channels * bufferOutputSize);
+            dspState.synthesis_read(bufferOutputSize);
+        }
+    }
+
+    /**
+     * Transforms a float [-1;1] to an 16 bit signed integer bounded in
+     * [-32768;32767].
+     * 
+     * @param f the float value to convert
+     * @return the integer value bounded a 16 bit signed value
+     */
+    private static int floatTo16BitsSignedInt(float f) {
+        int val = (int) (f * 32767.);
+        if (val > 32767) {
+            val = 32767;
+        }
+        if (val < -32768) {
+            val = -32768;
+        }
+        if (val < 0) {
+            val = val | 0x8000;
+        }
+        return val;
+    }
+
     private void playUdpStream(Thread me) {
         initJorbis();
 
@@ -512,7 +523,7 @@ public class JOrbisPlayer implements ActionListener, Runnable {
                 try {
                     bytes = soundBitStream.read(buffer, index, BUFFER_SIZE);
                 } catch (Exception e) {
-                    LOG.error("Error while reading from sound stream",e);
+                    LOG.error("Error while reading from sound stream", e);
                     return;
                 }
 
@@ -551,7 +562,7 @@ public class JOrbisPlayer implements ActionListener, Runnable {
                         int result = syncState.pageout(page);
                         if (result == 0) {
                             // Need more data
-                            break; 
+                            break;
                         }
                         if (result == 1) {
                             streamState.pagein(page);
@@ -609,77 +620,35 @@ public class JOrbisPlayer implements ActionListener, Runnable {
         playStream(me);
     }
 
-    public void actionPerformed(ActionEvent e) {
-
-        if (e.getSource() == statsButton) {
-            String item = (String) (cb.getSelectedItem());
-            if (!item.startsWith("http://")) {
-                return;
-            }
-            if (item.endsWith(".pls")) {
-                item = fetchPls(item);
-                if (item == null) {
-                    return;
-                }
-            } else if (item.endsWith(".m3u")) {
-                item = fetchM3u(item);
-                if (item == null) {
-                    return;
-                }
-            }
-            byte[] foo = item.getBytes();
-            for (int i = foo.length - 1; i >= 0; i--) {
-                if (foo[i] == '/') {
-                    item = item.substring(0, i + 1) + "stats.xml";
-                    break;
-                }
-            }
-            LOG.info("Selelected item is {}.", item);
-            try {
-                URL url = new URL(item);
-
-                BufferedReader stats = new BufferedReader(
-                        new InputStreamReader(url.openConnection().getInputStream()));
-                while (true) {
-                    String bar = stats.readLine();
-                    if (bar == null) {
-                        break;
-                    }
-                    LOG.info("bar {}", bar);
-                }
-            } catch (Exception ee) {
-                LOG.error("Error reading urls", ee);
-            }
-            return;
-        }
-
-        String command = ((JButton) (e.getSource())).getText();
-        if (command.equals("start") && activePlayerThread == null) {
-            playSound();
-        } else if (activePlayerThread != null) {
-            stopSound();
-        }
-    }
-
-    public String getTitle() {
-        return (String) (cb.getSelectedItem());
-    }
-
-    public void playSound() {
+    /**
+     * Starts to play a sound.
+     * 
+     * @return true if the command is accepted, false otherwise.
+     */
+    public boolean playSound() {
         if (activePlayerThread != null) {
-            return;
+            return false;
         }
         activePlayerThread = new Thread(this);
-        startButton.setText("stop");
+
         activePlayerThread.start();
+
+        return true;
     }
 
-    public void stopSound() {
+    /**
+     * Ends the play of a sound.
+     * 
+     * @return true if the command is accepted, false otherwise.
+     */
+    public boolean stopSound() {
         if (activePlayerThread == null) {
-            return;
+            return false;
         }
+
+        LOG.debug("Stop requested : player thread is no more active and must terminate ...");
         activePlayerThread = null;
-        startButton.setText("start");
+        return true;
     }
 
     /**
@@ -688,14 +657,18 @@ public class JOrbisPlayer implements ActionListener, Runnable {
      * @param item the item to play
      */
     InputStream selectSource(String item) {
-        if (item.endsWith(".pls")) {
-            item = fetchPls(item);
+
+        LOG.debug("Selecting source {}", item);
+        PlayList playlist = playerContext.getPlayList();
+
+        if (item.endsWith(PlayList.PLS_EXTENSION)) {
+            item = playlist.fetchPls(item);
             if (item == null) {
                 return null;
             }
             LOG.info("fetch: {}", item);
-        } else if (item.endsWith(".m3u")) {
-            item = fetchM3u(item);
+        } else if (item.endsWith(PlayList.M3U_EXTENSION)) {
+            item = playlist.fetchM3u(item);
             if (item == null) {
                 return null;
             }
@@ -713,8 +686,7 @@ public class JOrbisPlayer implements ActionListener, Runnable {
 
             urlc = url.openConnection();
             is = urlc.getInputStream();
-            currentSource = url.getProtocol() + "://" + url.getHost() + ":" + url.getPort()
-                    + url.getFile();
+
         } catch (Exception ee) {
             LOG.error("Exception while opening applet url", ee);
         }
@@ -723,7 +695,6 @@ public class JOrbisPlayer implements ActionListener, Runnable {
             try {
                 is = new FileInputStream(System.getProperty("user.dir")
                         + System.getProperty("file.separator") + item);
-                currentSource = null;
             } catch (Exception ee) {
                 LOG.error("Exception while opening file", ee);
             }
@@ -735,25 +706,23 @@ public class JOrbisPlayer implements ActionListener, Runnable {
 
         LOG.info("Select: {}", item);
 
-        {
-            boolean find = false;
-            for (int i = 0; i < cb.getItemCount(); i++) {
-                String foo = (String) (cb.getItemAt(i));
-                if (item.equals(foo)) {
-                    find = true;
-                    break;
-                }
+        boolean find = false;
+        for (int i = 0; i < playerContext.getItemCount(); i++) {
+            String foo = playerContext.getItemAtIndex(i);
+            if (item.equals(foo)) {
+                find = true;
+                break;
             }
-            if (!find) {
-                cb.addItem(item);
-            }
+        }
+        if (!find) {
+            playerContext.addItem(item);
         }
 
         int i = 0;
         String s = null;
         String t = null;
         udpPort = -1;
-        udpBaddress = null;
+
         while (urlc != null) {
             s = urlc.getHeaderField(i);
             t = urlc.getHeaderFieldKey(i);
@@ -767,342 +736,14 @@ public class JOrbisPlayer implements ActionListener, Runnable {
                 } catch (Exception ee) {
                     LOG.error("Exception while parsing UDP port", ee);
                 }
-            } else if (t != null && t.equals("udp-broadcast-address")) {
-                udpBaddress = s;
             }
         }
         return is;
     }
 
-    String fetchPls(String pls) {
-        InputStream pstream = null;
-        if (pls.startsWith("http://")) {
-            try {
-                URL url = new URL(pls);
-
-                URLConnection urlc = url.openConnection();
-                pstream = urlc.getInputStream();
-            } catch (Exception ee) {
-                LOG.error("Exception while opening url", ee);
-                return null;
-            }
-        }
-        if (pstream == null) {
-            try {
-                pstream = new FileInputStream(System.getProperty("user.dir")
-                        + System.getProperty("file.separator") + pls);
-            } catch (Exception ee) {
-                LOG.error("Exception while opening file stream", ee);
-                return null;
-            }
-        }
-
-        String line = null;
-        while (true) {
-            try {
-                line = readline(pstream);
-            } catch (Exception e) {
-            }
-            if (line == null) {
-                break;
-            }
-            if (line.startsWith("File1=")) {
-                byte[] foo = line.getBytes();
-                int i = 6;
-                for (; i < foo.length; i++) {
-                    if (foo[i] == 0x0d) {
-                        break;
-                    }
-                }
-                return line.substring(6, i);
-            }
-        }
-        return null;
+    /** @return true if the player has an active thread, false otherwise */
+    public boolean hasActivePlayerThread() {
+        return activePlayerThread != null;
     }
 
-    String fetchM3u(String m3u) {
-        InputStream pstream = null;
-        if (m3u.startsWith("http://")) {
-            try {
-                URL url = new URL(m3u);
-               
-                URLConnection urlc = url.openConnection();
-                pstream = urlc.getInputStream();
-            } catch (Exception ee) {
-                LOG.error("Exception while reading url", ee);
-                return null;
-            }
-        }
-        if (pstream == null) {
-            try {
-                pstream = new FileInputStream(System.getProperty("user.dir")
-                        + System.getProperty("file.separator") + m3u);
-            } catch (Exception ee) {
-                LOG.error("Exception while opening file", ee);
-                return null;
-            }
-        }
-
-        String line = null;
-        while (true) {
-            try {
-                line = readline(pstream);
-            } catch (Exception e) {
-            }
-            if (line == null) {
-                break;
-            }
-            return line;
-        }
-        return null;
-    }
-
-    void loadPlaylist() {
-
-        if (playlistfile == null) {
-            return;
-        }
-
-        try {
-            InputStream is = null;
-            try {
-                URL url = new URL(playlistfile);
-                
-                URLConnection urlc = url.openConnection();
-                is = urlc.getInputStream();
-            } catch (Exception ee) {
-            }
-            if (is == null) {
-                try {
-                    is = new FileInputStream(System.getProperty("user.dir")
-                            + System.getProperty("file.separator") + playlistfile);
-                } catch (Exception ee) {
-                }
-            }
-
-            if (is == null) {
-                return;
-            }
-
-            while (true) {
-                String line = readline(is);
-                if (line == null) {
-                    break;
-                }
-                byte[] foo = line.getBytes();
-                for (int i = 0; i < foo.length; i++) {
-                    if (foo[i] == 0x0d) {
-                        line = new String(foo, 0, i);
-                        break;
-                    }
-                }
-                playlist.addElement(line);
-            }
-        } catch (Exception e) {
-            LOG.error("Exception setting urls", e);
-        }
-    }
-
-    private String readline(InputStream is) {
-        StringBuffer rtn = new StringBuffer();
-        int temp;
-        do {
-            try {
-                temp = is.read();
-            } catch (Exception e) {
-                return (null);
-            }
-            if (temp == -1) {
-                String str = rtn.toString();
-                if (str.length() == 0) {
-                    return (null);
-                }
-                return str;
-            }
-            if (temp != 0 && temp != '\n' && temp != '\r') {
-                rtn.append((char) temp);
-            }
-        } while (temp != '\n' && temp != '\r');
-        return (rtn.toString());
-    }
-
-    void initUI() {
-        panel = new JPanel();
-
-        cb = new JComboBox(playlist);
-        cb.setEditable(true);
-        panel.add(cb);
-
-        startButton = new JButton("start");
-        startButton.addActionListener(this);
-        panel.add(startButton);
-
-        if (icestats) {
-            statsButton = new JButton("IceStats");
-            statsButton.addActionListener(this);
-            panel.add(statsButton);
-        }
-    }
-
-    class UDPIO extends InputStream {
-        InetAddress address;
-        DatagramSocket socket = null;
-        DatagramPacket sndpacket;
-        DatagramPacket recpacket;
-        byte[] buf = new byte[1024];
-        // String host;
-        int port;
-        byte[] inbuffer = new byte[2048];
-        byte[] outbuffer = new byte[1024];
-        int instart = 0, inend = 0, outindex = 0;
-
-        UDPIO(int port) {
-            this.port = port;
-            try {
-                socket = new DatagramSocket(port);
-            } catch (Exception e) {
-                LOG.error("Exception while opening socket", e);
-            }
-            recpacket = new DatagramPacket(buf, 1024);
-        }
-
-        void setTimeout(int i) {
-            try {
-                socket.setSoTimeout(i);
-            } catch (Exception e) {
-                LOG.error("Error while setting socket timeout", e);
-            }
-        }
-
-        int getByte() throws java.io.IOException {
-            if ((inend - instart) < 1) {
-                read(1);
-            }
-            return inbuffer[instart++] & 0xff;
-        }
-
-        int getByte(byte[] array) throws java.io.IOException {
-            return getByte(array, 0, array.length);
-        }
-
-        int getByte(byte[] array, int begin, int length) throws java.io.IOException {
-            int i = 0;
-            int foo = begin;
-            while (true) {
-                if ((i = (inend - instart)) < length) {
-                    if (i != 0) {
-                        System.arraycopy(inbuffer, instart, array, begin, i);
-                        begin += i;
-                        length -= i;
-                        instart += i;
-                    }
-                    read(length);
-                    continue;
-                }
-                System.arraycopy(inbuffer, instart, array, begin, length);
-                instart += length;
-                break;
-            }
-            return begin + length - foo;
-        }
-
-        int getShort() throws java.io.IOException {
-            if ((inend - instart) < 2) {
-                read(2);
-            }
-            int s = 0;
-            s = inbuffer[instart++] & 0xff;
-            s = ((s << 8) & 0xffff) | (inbuffer[instart++] & 0xff);
-            return s;
-        }
-
-        int getInt() throws java.io.IOException {
-            if ((inend - instart) < 4) {
-                read(4);
-            }
-            int i = 0;
-            i = inbuffer[instart++] & 0xff;
-            i = ((i << 8) & 0xffff) | (inbuffer[instart++] & 0xff);
-            i = ((i << 8) & 0xffffff) | (inbuffer[instart++] & 0xff);
-            i = (i << 8) | (inbuffer[instart++] & 0xff);
-            return i;
-        }
-
-        void getPad(int n) throws java.io.IOException {
-            int i;
-            while (n > 0) {
-                if ((i = inend - instart) < n) {
-                    n -= i;
-                    instart += i;
-                    read(n);
-                    continue;
-                }
-                instart += n;
-                break;
-            }
-        }
-
-        void read(int n) throws java.io.IOException {
-            if (n > inbuffer.length) {
-                n = inbuffer.length;
-            }
-            instart = inend = 0;
-            int i;
-            while (true) {
-                recpacket.setData(buf, 0, 1024);
-                socket.receive(recpacket);
-
-                i = recpacket.getLength();
-                System.arraycopy(recpacket.getData(), 0, inbuffer, inend, i);
-                if (i == -1) {
-                    throw new java.io.IOException();
-                }
-                inend += i;
-                break;
-            }
-        }
-
-        public void close() throws java.io.IOException {
-            socket.close();
-        }
-
-        public int read() throws java.io.IOException {
-            return 0;
-        }
-
-        public int read(byte[] array, int begin, int length) throws java.io.IOException {
-            return getByte(array, begin, length);
-        }
-    }
-
-    public static void main(String[] arg) {
-
-        JFrame frame = new JFrame("JOrbisPlayer");
-        frame.setBackground(Color.lightGray);
-        frame.setBackground(Color.white);
-        frame.getContentPane().setLayout(new BorderLayout());
-
-        frame.addWindowListener(new WindowAdapter() {
-            
-            @Override
-            public void windowClosing(WindowEvent e) {
-                System.exit(0);
-            }
-        });
-
-        JOrbisPlayer player = new JOrbisPlayer();
-
-        if (arg.length > 0) {
-            for (int i = 0; i < arg.length; i++) {
-                player.playlist.addElement(arg[i]);
-            }
-        }
-
-        player.loadPlaylist();
-        player.initUI();
-
-        frame.getContentPane().add(player.panel);
-        frame.pack();
-        frame.setVisible(true);
-    }
 }
