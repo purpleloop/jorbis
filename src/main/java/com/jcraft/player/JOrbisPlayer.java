@@ -251,6 +251,7 @@ public class JOrbisPlayer implements Runnable {
                     return;
                 }
             }
+
             streamState.init(page.serialno());
             streamState.reset();
 

@@ -1,10 +1,7 @@
 package com.jcraft.player;
 
-import java.awt.BorderLayout;
 import java.awt.Color;
-import java.awt.Component;
 import java.awt.event.ActionEvent;
-import java.awt.event.ActionListener;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.io.BufferedReader;
@@ -13,6 +10,8 @@ import java.net.URL;
 import java.util.ArrayList;
 import java.util.List;
 
+import javax.swing.AbstractAction;
+import javax.swing.Action;
 import javax.swing.JButton;
 import javax.swing.JComboBox;
 import javax.swing.JFrame;
@@ -22,7 +21,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 /** JOrbis player GUI. */
-public class JOrbisPlayerGui extends JFrame implements ActionListener, JOrbisPlayerContext {
+public class JOrbisPlayerGui extends JFrame implements JOrbisPlayerContext {
 
     /** Serial tag. */
     private static final long serialVersionUID = 8503266743761444447L;
@@ -33,20 +32,23 @@ public class JOrbisPlayerGui extends JFrame implements ActionListener, JOrbisPla
     /** Start label to use on start/stop button. */
     private static final String START_LABEL_BUTTON = "start";
 
-    /** Stop label to use on start/stop button. */
+    /** Start label to use on start/stop button. */
     private static final String STOP_LABEL_BUTTON = "stop";
+
+    /** The state label to use on stats button. */
+    private static final String STATS_LABEL_BUTTON = "IceStats";
 
     /** Stats. */
     public static final boolean icestats = false;
 
     /** The main panel. */
-    private JPanel panel;
+    private JPanel mainPanel;
 
     /** A combo box used to select sound files. */
     private JComboBox<String> comboBox;
 
     /** Button for starting/stop playing. */
-    private JButton startButton;
+    private JButton startStopButton;
 
     /** A button to display stats. */
     private JButton statsButton;
@@ -57,6 +59,48 @@ public class JOrbisPlayerGui extends JFrame implements ActionListener, JOrbisPla
     /** The associated JorbisPlayer. */
     private JOrbisPlayer player;
 
+    /** Action for start playing. */
+    private Action startAction = new AbstractAction(START_LABEL_BUTTON) {
+
+        /** Serial tag. */
+        private static final long serialVersionUID = -6018293552421623165L;
+
+        @Override
+        public void actionPerformed(ActionEvent e) {
+            if (!player.hasActivePlayerThread() && player.playSound()) {
+                startStopButton.setAction(stopAction);
+            }
+        }
+
+    };
+
+    /** Action for stop playing. */
+    private Action stopAction = new AbstractAction(STOP_LABEL_BUTTON) {
+
+        /** Serial tag. */
+        private static final long serialVersionUID = -2144568494787570807L;
+
+        @Override
+        public void actionPerformed(ActionEvent e) {
+            if (player.hasActivePlayerThread() && player.stopSound()) {
+                startStopButton.setAction(startAction);
+            }
+        }
+
+    };
+
+    /** Action for showing statistics. */
+    private Action statsAction = new AbstractAction(STATS_LABEL_BUTTON) {
+
+        /** Serial tag. */
+        private static final long serialVersionUID = 9084528436238492442L;
+
+        @Override
+        public void actionPerformed(ActionEvent e) {
+            stats();
+        }
+    };
+
     /**
      * Constructor of the player UI.
      * 
@@ -65,80 +109,34 @@ public class JOrbisPlayerGui extends JFrame implements ActionListener, JOrbisPla
     public JOrbisPlayerGui(List<String> playListArgs) {
         super("JOrbisPlayer");
 
+        setBackground(Color.white);
+
+        mainPanel = new JPanel();
+        setContentPane(mainPanel);
+        
         playlist = new PlayList(playListArgs);
 
         player = new JOrbisPlayer(this);
 
-        panel = new JPanel();
-
-        setContentPane(panel);
 
         comboBox = new JComboBox<>(playlist.getVector());
         comboBox.setEditable(true);
-        panel.add(comboBox);
+        mainPanel.add(comboBox);
 
-        startButton = new JButton(START_LABEL_BUTTON);
-        startButton.addActionListener(this);
-        panel.add(startButton);
+        startStopButton = new JButton(startAction);
+        mainPanel.add(startStopButton);
 
         if (icestats) {
-            statsButton = new JButton("IceStats");
-            statsButton.addActionListener(this);
-            panel.add(statsButton);
+            statsButton = new JButton(statsAction);
+            mainPanel.add(statsButton);
         }
 
-        setBackground(Color.lightGray);
-        setBackground(Color.white);
 
         pack();
-
-    }
-
-    @Override
-    public void actionPerformed(ActionEvent e) {
-
-        if (e.getSource() == getStatsButton()) {
-            stats();
-            return;
-        }
-
-        String command = ((JButton) (e.getSource())).getText();
-        if (command.equals(START_LABEL_BUTTON)) {
-
-            startPlay();
-        } else {
-
-            stopPlay();
-        }
-    }
-
-    private void startPlay() {
-
-        if (player.hasActivePlayerThread()) {
-            return;
-        }
-
-        String item = getSelectedItem();
-        int currentIndex = getIndexOfItem(item);
-
-        if (player.playSound()) {
-            startButton.setText(STOP_LABEL_BUTTON);
-        }
-    }
-    
-    private void stopPlay() {
-
-        if (player.hasActivePlayerThread()) {
-
-            if (player.stopSound()) {
-                startButton.setText(START_LABEL_BUTTON);
-            }
-        }
-
     }
 
     private void stats() {
-        String item = getSelectedItem();
+        String item = getCurrentItem();
         if (!item.startsWith("http://")) {
             // Not an http resource
             return;
@@ -177,7 +175,6 @@ public class JOrbisPlayerGui extends JFrame implements ActionListener, JOrbisPla
         } catch (Exception ee) {
             LOG.error("Error reading urls", ee);
         }
-        return;
 
     }
 
@@ -186,21 +183,13 @@ public class JOrbisPlayerGui extends JFrame implements ActionListener, JOrbisPla
         return playlist;
     }
 
-    public String getSelectedItem() {
-        return (String) comboBox.getSelectedItem();
-    }
-
     @Override
     public String getCurrentItem() {
-        return getSelectedItem();
+        return (String) comboBox.getSelectedItem();
     }
 
     public String getItemAtIndex(int currentIndex) {
         return comboBox.getItemAt(currentIndex);
-    }
-
-    public void setSelectedIndex(int currentIndex) {
-        comboBox.setSelectedIndex(currentIndex);
     }
 
     public int getItemCount() {
@@ -210,33 +199,23 @@ public class JOrbisPlayerGui extends JFrame implements ActionListener, JOrbisPla
     @Override
     public void next() {
         LOG.debug("Advance in playlist");
-        int currentIndex = getIndexOfItem(getSelectedItem()) + 1;
-        if (currentIndex >= getItemCount()) {
+        int nextIndex = comboBox.getSelectedIndex() + 1;
+        if (nextIndex >= getItemCount()) {
 
             LOG.debug("End of playlist restart at beginning");
-            currentIndex = 0;
+            nextIndex = 0;
         }
 
-        setSelectedIndex(currentIndex);
-    }
-
-    public int getIndexOfItem(String item) {
-        for (int i = 0; i < comboBox.getItemCount(); i++) {
-            String foo = comboBox.getItemAt(i);
-            if (item.equals(foo)) {
-                return i;
-            }
-        }
-        comboBox.addItem(item);
-        return comboBox.getItemCount() - 1;
-    }
-
-    public JButton getStatsButton() {
-        return statsButton;
+        comboBox.setSelectedIndex(nextIndex);
     }
 
     public void addItem(String item) {
         comboBox.addItem(item);
+    }
+
+    @Override
+    public void handleEndOfPlay() {
+        startStopButton.setText(START_LABEL_BUTTON);
     }
 
     /**
@@ -267,11 +246,6 @@ public class JOrbisPlayerGui extends JFrame implements ActionListener, JOrbisPla
         });
 
         jOrbisPlayerFrame.setVisible(true);
-    }
-
-    @Override
-    public void handleEndOfPlay() {
-        startButton.setText(START_LABEL_BUTTON);
     }
 
 }

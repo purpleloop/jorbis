@@ -5,7 +5,7 @@ public interface JOrbisPlayerContext {
 
     /**
      * @param requestedIndex the requested index
-     * @return item at the selectedindex
+     * @return item at the selected index
      */
     String getItemAtIndex(int requestedIndex);
 
