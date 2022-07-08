@@ -20,6 +20,11 @@ import javax.swing.JPanel;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import com.jcraft.player.playlist.ComboPlayListHolder;
+import com.jcraft.player.playlist.PlayList;
+import com.jcraft.player.playlist.PlayListHolder;
+import com.jcraft.player.playlist.PlayListUtils;
+
 /** JOrbis player GUI. */
 public class JOrbisPlayerGui extends JFrame implements JOrbisPlayerContext {
 
@@ -28,6 +33,9 @@ public class JOrbisPlayerGui extends JFrame implements JOrbisPlayerContext {
 
     /** Logger of the class. */
     private static final Logger LOG = LogManager.getLogger(JOrbisPlayerGui.class);
+
+    /** Are stats active ? */
+    public static final boolean USE_ICESTATS = false;
 
     /** Start label to use on start/stop button. */
     private static final String START_LABEL_BUTTON = "start";
@@ -38,26 +46,26 @@ public class JOrbisPlayerGui extends JFrame implements JOrbisPlayerContext {
     /** The state label to use on stats button. */
     private static final String STATS_LABEL_BUTTON = "IceStats";
 
-    /** Stats. */
-    public static final boolean icestats = false;
-
     /** The main panel. */
     private JPanel mainPanel;
 
     /** A combo box used to select sound files. */
     private JComboBox<String> comboBox;
 
-    /** Button for starting/stop playing. */
+    /** A button for starting/stop playing. */
     private JButton startStopButton;
 
-    /** A button to display stats. */
+    /** A button to display stats, when active. */
     private JButton statsButton;
 
-    /** The playlist. */
-    private PlayList playlist;
+    /** The playList. */
+    private PlayList playList;
 
     /** The associated JorbisPlayer. */
     private JOrbisPlayer player;
+
+    /** The playList holder (here, a ComoboBox managed playList). */
+    private PlayListHolder playListHolder;
 
     /** Action for start playing. */
     private Action startAction = new AbstractAction(START_LABEL_BUTTON) {
@@ -104,7 +112,7 @@ public class JOrbisPlayerGui extends JFrame implements JOrbisPlayerContext {
     /**
      * Constructor of the player UI.
      * 
-     * @param playListArgs the playlist entries
+     * @param playListArgs the playList entries
      */
     public JOrbisPlayerGui(List<String> playListArgs) {
         super("JOrbisPlayer");
@@ -113,41 +121,43 @@ public class JOrbisPlayerGui extends JFrame implements JOrbisPlayerContext {
 
         mainPanel = new JPanel();
         setContentPane(mainPanel);
-        
-        playlist = new PlayList(playListArgs);
 
-        player = new JOrbisPlayer(this);
+        playList = new PlayList(playListArgs);
 
-
-        comboBox = new JComboBox<>(playlist.getVector());
+        comboBox = new JComboBox<>();
         comboBox.setEditable(true);
         mainPanel.add(comboBox);
+
+        // Associates the playList with the ComboBox. 
+        playListHolder = new ComboPlayListHolder(playList, comboBox);
+
+        player = new JOrbisPlayer(this, playListHolder);
 
         startStopButton = new JButton(startAction);
         mainPanel.add(startStopButton);
 
-        if (icestats) {
+        if (USE_ICESTATS) {
             statsButton = new JButton(statsAction);
             mainPanel.add(statsButton);
         }
 
-
         pack();
     }
 
+    /** Fetches stats. */
     private void stats() {
-        String item = getCurrentItem();
+        String item = playListHolder.getCurrentItem();
         if (!item.startsWith("http://")) {
             // Not an http resource
             return;
         }
         if (item.endsWith(PlayList.PLS_EXTENSION)) {
-            item = playlist.fetchPls(item);
+            item = PlayListUtils.fetchPls(item);
             if (item == null) {
                 return;
             }
         } else if (item.endsWith(PlayList.M3U_EXTENSION)) {
-            item = playlist.fetchM3u(item);
+            item = PlayListUtils.fetchM3u(item);
             if (item == null) {
                 return;
             }
@@ -178,39 +188,9 @@ public class JOrbisPlayerGui extends JFrame implements JOrbisPlayerContext {
 
     }
 
-    /** @return the playlist */
-    public PlayList getPlayList() {
-        return playlist;
-    }
-
-    @Override
-    public String getCurrentItem() {
-        return (String) comboBox.getSelectedItem();
-    }
-
-    public String getItemAtIndex(int currentIndex) {
-        return comboBox.getItemAt(currentIndex);
-    }
-
-    public int getItemCount() {
-        return comboBox.getItemCount();
-    }
-
-    @Override
-    public void next() {
-        LOG.debug("Advance in playlist");
-        int nextIndex = comboBox.getSelectedIndex() + 1;
-        if (nextIndex >= getItemCount()) {
-
-            LOG.debug("End of playlist restart at beginning");
-            nextIndex = 0;
-        }
-
-        comboBox.setSelectedIndex(nextIndex);
-    }
-
-    public void addItem(String item) {
-        comboBox.addItem(item);
+    /** @return the playListHolder */
+    public PlayListHolder getPlayListHolder() {
+        return playListHolder;
     }
 
     @Override

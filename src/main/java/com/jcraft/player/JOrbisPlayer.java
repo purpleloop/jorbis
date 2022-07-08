@@ -55,9 +55,14 @@ import com.jcraft.jorbis.Block;
 import com.jcraft.jorbis.Comment;
 import com.jcraft.jorbis.DspState;
 import com.jcraft.jorbis.Info;
+import com.jcraft.player.playlist.PlayList;
+import com.jcraft.player.playlist.PlayListHolder;
+import com.jcraft.player.playlist.PlayListUtils;
 
 /** JOrbis player. */
 public class JOrbisPlayer implements Runnable {
+
+    private static final String OGG_EXTENSION = ".ogg";
 
     /** Sample size, in bits. */
     private static final int SAMPLE_SIZE_IN_BITS = 16;
@@ -103,13 +108,18 @@ public class JOrbisPlayer implements Runnable {
     /** Context of the player. */
     private JOrbisPlayerContext playerContext;
 
+    /** THe playLit holder. */
+    private PlayListHolder playListHolder;
+
     /**
      * Constructor of the player.
      * 
      * @param playerContext the player context
+     * @param playListHolder the playList holder 
      */
-    public JOrbisPlayer(JOrbisPlayerContext playerContext) {
+    public JOrbisPlayer(JOrbisPlayerContext playerContext, PlayListHolder playListHolder) {
         this.playerContext = playerContext;
+        this.playListHolder = playListHolder;
     }
 
     /** Initializes JOrbis fields. */
@@ -182,9 +192,9 @@ public class JOrbisPlayer implements Runnable {
         LOG.debug("Player thread started {}", localThread.getId());
 
         // Playing items of the playlist in loop
-        while ((activePlayerThread == localThread) && (playerContext.getItemCount() > 0)) {
+        while ((activePlayerThread == localThread) && (playListHolder.getItemCount() > 0)) {
 
-            String playlistItem = playerContext.getCurrentItem();
+            String playlistItem = playListHolder.getCurrentItem();
             soundBitStream = selectSource(playlistItem);
 
             if (soundBitStream != null) {
@@ -204,7 +214,7 @@ public class JOrbisPlayer implements Runnable {
             
             // If this thread is still active, select next item in list
             if (activePlayerThread == localThread) {
-                playerContext.next();
+                playListHolder.next();
             }
             
         }
@@ -238,6 +248,7 @@ public class JOrbisPlayer implements Runnable {
                 LOG.error("Error while reading the sound stream into the buffer", e);
                 return;
             }
+
             syncState.wrote(bytes);
 
             if (chained) {
@@ -420,6 +431,117 @@ public class JOrbisPlayer implements Runnable {
         }
     }
 
+    private void playUdpStream(Thread me) {
+    
+        initJorbis();
+        
+        LOG.info("Playing stream");
+    
+        try {
+            loop: while (true) {
+    
+                int index = syncState.buffer(BUFFER_SIZE);
+                buffer = syncState.data;
+                try {
+                    bytes = soundBitStream.read(buffer, index, BUFFER_SIZE);
+                } catch (Exception e) {
+                    LOG.error("Error while reading from sound stream", e);
+                    return;
+                }
+    
+                syncState.wrote(bytes);
+                if (syncState.pageout(page) != 1) {
+                    LOG.error("Input does not appear to be an Ogg bitstream.");
+                    return;
+                }
+    
+                streamState.init(page.serialno());
+                streamState.reset();
+    
+                info.init();
+                comment.init();
+                if (streamState.pagein(page) < 0) {
+                    // error; stream version mismatch perhaps
+                    LOG.error("Error reading first page of Ogg bitstream data.");
+                    return;
+                }
+    
+                if (streamState.packetout(packet) != 1) {
+                    // no page? must not be vorbis
+                    LOG.error("Error reading initial header packet.");
+                    return;
+                }
+    
+                if (info.synthesis_headerin(comment, packet) < 0) {
+                    // error case; not a vorbis header
+                    LOG.error("This Ogg bitstream does not contain Vorbis audio data.");
+                    return;
+                }
+    
+                int i = 0;
+                while (i < 2) {
+                    while (i < 2) {
+                        int result = syncState.pageout(page);
+                        if (result == 0) {
+                            // Need more data
+                            break;
+                        }
+                        if (result == 1) {
+                            streamState.pagein(page);
+                            while (i < 2) {
+                                result = streamState.packetout(packet);
+                                if (result == 0) {
+                                    break;
+                                }
+                                if (result == -1) {
+                                    LOG.error("Corrupt secondary header.  Exiting.");
+                                    break loop;
+                                }
+                                info.synthesis_headerin(comment, packet);
+                                i++;
+                            }
+                        }
+                    }
+    
+                    if (i == 2) {
+                        break;
+                    }
+    
+                    index = syncState.buffer(BUFFER_SIZE);
+                    buffer = syncState.data;
+                    try {
+                        bytes = soundBitStream.read(buffer, index, BUFFER_SIZE);
+                    } catch (Exception e) {
+                        LOG.error("Error while reading from the sound stream", e);
+                        return;
+                    }
+                    if (bytes == 0 && i < 2) {
+                        LOG.error("End of file before finding all Vorbis headers!");
+                        return;
+                    }
+                    syncState.wrote(bytes);
+                }
+                break;
+            }
+        } catch (Exception e) {
+        }
+    
+        try {
+            soundBitStream.close();
+        } catch (Exception e) {
+        }
+    
+        UDPIO io = null;
+        try {
+            io = new UDPIO(udpPort);
+        } catch (Exception e) {
+            return;
+        }
+    
+        soundBitStream = io;
+        playStream(me);
+    }
+
     /** Handle meta informations. */
     private void handleMetaInfo() {
 
@@ -514,113 +636,6 @@ public class JOrbisPlayer implements Runnable {
         return val;
     }
 
-    private void playUdpStream(Thread me) {
-        initJorbis();
-
-        try {
-            loop: while (true) {
-                int index = syncState.buffer(BUFFER_SIZE);
-                buffer = syncState.data;
-                try {
-                    bytes = soundBitStream.read(buffer, index, BUFFER_SIZE);
-                } catch (Exception e) {
-                    LOG.error("Error while reading from sound stream", e);
-                    return;
-                }
-
-                syncState.wrote(bytes);
-                if (syncState.pageout(page) != 1) {
-                    LOG.error("Input does not appear to be an Ogg bitstream.");
-                    return;
-                }
-
-                streamState.init(page.serialno());
-                streamState.reset();
-
-                info.init();
-                comment.init();
-                if (streamState.pagein(page) < 0) {
-                    // error; stream version mismatch perhaps
-                    LOG.error("Error reading first page of Ogg bitstream data.");
-                    return;
-                }
-
-                if (streamState.packetout(packet) != 1) {
-                    // no page? must not be vorbis
-                    LOG.error("Error reading initial header packet.");
-                    return;
-                }
-
-                if (info.synthesis_headerin(comment, packet) < 0) {
-                    // error case; not a vorbis header
-                    LOG.error("This Ogg bitstream does not contain Vorbis audio data.");
-                    return;
-                }
-
-                int i = 0;
-                while (i < 2) {
-                    while (i < 2) {
-                        int result = syncState.pageout(page);
-                        if (result == 0) {
-                            // Need more data
-                            break;
-                        }
-                        if (result == 1) {
-                            streamState.pagein(page);
-                            while (i < 2) {
-                                result = streamState.packetout(packet);
-                                if (result == 0) {
-                                    break;
-                                }
-                                if (result == -1) {
-                                    LOG.error("Corrupt secondary header.  Exiting.");
-                                    break loop;
-                                }
-                                info.synthesis_headerin(comment, packet);
-                                i++;
-                            }
-                        }
-                    }
-
-                    if (i == 2) {
-                        break;
-                    }
-
-                    index = syncState.buffer(BUFFER_SIZE);
-                    buffer = syncState.data;
-                    try {
-                        bytes = soundBitStream.read(buffer, index, BUFFER_SIZE);
-                    } catch (Exception e) {
-                        LOG.error("Error while reading from the sound stream", e);
-                        return;
-                    }
-                    if (bytes == 0 && i < 2) {
-                        LOG.error("End of file before finding all Vorbis headers!");
-                        return;
-                    }
-                    syncState.wrote(bytes);
-                }
-                break;
-            }
-        } catch (Exception e) {
-        }
-
-        try {
-            soundBitStream.close();
-        } catch (Exception e) {
-        }
-
-        UDPIO io = null;
-        try {
-            io = new UDPIO(udpPort);
-        } catch (Exception e) {
-            return;
-        }
-
-        soundBitStream = io;
-        playStream(me);
-    }
-
     /**
      * Starts to play a sound.
      * 
@@ -631,9 +646,7 @@ public class JOrbisPlayer implements Runnable {
             return false;
         }
         activePlayerThread = new Thread(this);
-
         activePlayerThread.start();
-
         return true;
     }
 
@@ -655,28 +668,29 @@ public class JOrbisPlayer implements Runnable {
     /**
      * Selects and open the sound source to play.
      * 
-     * @param item the item to play
+     * @param selectedItem the item to play
      */
-    InputStream selectSource(String item) {
+    InputStream selectSource(String selectedItem) {
 
+        String item = selectedItem;
+        
         LOG.debug("Selecting source {}", item);
-        PlayList playlist = playerContext.getPlayList();
 
         if (item.endsWith(PlayList.PLS_EXTENSION)) {
-            item = playlist.fetchPls(item);
+            item = PlayListUtils.fetchPls(item);
             if (item == null) {
                 return null;
             }
             LOG.info("fetch: {}", item);
         } else if (item.endsWith(PlayList.M3U_EXTENSION)) {
-            item = playlist.fetchM3u(item);
+            item = PlayListUtils.fetchM3u(item);
             if (item == null) {
                 return null;
             }
             LOG.info("fetch: {}", item);
         }
 
-        if (!item.endsWith(".ogg")) {
+        if (!item.endsWith(OGG_EXTENSION)) {
             return null;
         }
 
@@ -707,17 +721,7 @@ public class JOrbisPlayer implements Runnable {
 
         LOG.info("Select: {}", item);
 
-        boolean find = false;
-        for (int i = 0; i < playerContext.getItemCount(); i++) {
-            String foo = playerContext.getItemAtIndex(i);
-            if (item.equals(foo)) {
-                find = true;
-                break;
-            }
-        }
-        if (!find) {
-            playerContext.addItem(item);
-        }
+        playListHolder.addItemIfNotFound(item);
 
         int i = 0;
         String s = null;

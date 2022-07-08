@@ -1,34 +1,14 @@
 package com.jcraft.player;
 
+import com.jcraft.player.playlist.PlayListHolder;
+
 /** Context of the JOrbisPlayer. */
 public interface JOrbisPlayerContext {
 
-    /**
-     * @param requestedIndex the requested index
-     * @return item at the selected index
-     */
-    String getItemAtIndex(int requestedIndex);
-
-    /** @return the number of items */
-    int getItemCount();
-
-    /**
-     * Adds an item to the playlist.
-     * 
-     * @param item item to add
-     */
-    void addItem(String item);
-
-    /** @return the playlist */
-    PlayList getPlayList();
+    /** @return the playListHolder */
+    PlayListHolder getPlayListHolder();
 
     /** Handles the end of a play. */
     void handleEndOfPlay();
-
-    /** Advance in the playlist. */
-    void next();
-
-    /** @return current item on the playlist */
-    String getCurrentItem();
-
+    
 }
