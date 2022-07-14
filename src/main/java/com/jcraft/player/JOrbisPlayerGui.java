@@ -5,10 +5,12 @@ import java.awt.event.ActionEvent;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.io.BufferedReader;
+import java.io.FileInputStream;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.URL;
-import java.util.ArrayList;
-import java.util.List;
+import java.net.URLConnection;
+import java.util.Vector;
 
 import javax.swing.AbstractAction;
 import javax.swing.Action;
@@ -21,7 +23,6 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import com.jcraft.player.playlist.ComboPlayListHolder;
-import com.jcraft.player.playlist.PlayList;
 import com.jcraft.player.playlist.PlayListHolder;
 import com.jcraft.player.playlist.PlayListUtils;
 
@@ -57,9 +58,6 @@ public class JOrbisPlayerGui extends JFrame implements JOrbisPlayerContext {
 
     /** A button to display stats, when active. */
     private JButton statsButton;
-
-    /** The playList. */
-    private PlayList playList;
 
     /** The associated JorbisPlayer. */
     private JOrbisPlayer player;
@@ -114,7 +112,7 @@ public class JOrbisPlayerGui extends JFrame implements JOrbisPlayerContext {
      * 
      * @param playListArgs the playList entries
      */
-    public JOrbisPlayerGui(List<String> playListArgs) {
+    public JOrbisPlayerGui(Vector<String> playListArgs) {
         super("JOrbisPlayer");
 
         setBackground(Color.white);
@@ -122,14 +120,12 @@ public class JOrbisPlayerGui extends JFrame implements JOrbisPlayerContext {
         mainPanel = new JPanel();
         setContentPane(mainPanel);
 
-        playList = new PlayList(playListArgs);
-
         comboBox = new JComboBox<>();
         comboBox.setEditable(true);
         mainPanel.add(comboBox);
 
-        // Associates the playList with the ComboBox. 
-        playListHolder = new ComboPlayListHolder(playList, comboBox);
+        // Associates the playList with the ComboBox.
+        playListHolder = new ComboPlayListHolder(playListArgs, comboBox);
 
         player = new JOrbisPlayer(this, playListHolder);
 
@@ -151,12 +147,12 @@ public class JOrbisPlayerGui extends JFrame implements JOrbisPlayerContext {
             // Not an http resource
             return;
         }
-        if (item.endsWith(PlayList.PLS_EXTENSION)) {
+        if (item.endsWith(PlayListUtils.PLS_EXTENSION)) {
             item = PlayListUtils.fetchPls(item);
             if (item == null) {
                 return;
             }
-        } else if (item.endsWith(PlayList.M3U_EXTENSION)) {
+        } else if (item.endsWith(PlayListUtils.M3U_EXTENSION)) {
             item = PlayListUtils.fetchM3u(item);
             if (item == null) {
                 return;
@@ -199,6 +195,59 @@ public class JOrbisPlayerGui extends JFrame implements JOrbisPlayerContext {
     }
 
     /**
+     * Collects the elements for the play list.
+     * 
+     * @param args plaList elements provided at startup arguments
+     */
+    public static Vector<String> composePlayList(String[] args) {
+
+        Vector<String> playList = new Vector<>();
+
+        // Each argument is added to the playlist.
+        for (String playListArg : args) {
+            playList.add(playListArg);
+        }
+
+        String playlistfile = "playlist";
+
+        try {
+            InputStream playlistInputStream = null;
+            try {
+                URL url = new URL(playlistfile);
+
+                URLConnection urlc = url.openConnection();
+                playlistInputStream = urlc.getInputStream();
+            } catch (Exception ee) {
+            }
+            if (playlistInputStream == null) {
+                try {
+
+                    String currentFoderPlaylist = System.getProperty("user.dir")
+                            + System.getProperty("file.separator") + playlistfile;
+                    playlistInputStream = new FileInputStream(currentFoderPlaylist);
+                } catch (Exception ee) {
+                }
+            }
+
+            if (playlistInputStream != null) {
+
+                try (BufferedReader br = new BufferedReader(
+                        new InputStreamReader(playlistInputStream));) {
+                    String playListLine;
+                    while ((playListLine = br.readLine()) != null) {
+                        playList.add(playListLine);
+                    }
+                }
+            }
+
+        } catch (Exception e) {
+            LOG.error("Exception setting urls", e);
+        }
+
+        return playList;
+    }
+
+    /**
      * Entry point.
      * 
      * @param arg command line arguments
@@ -207,16 +256,7 @@ public class JOrbisPlayerGui extends JFrame implements JOrbisPlayerContext {
 
         LOG.info("Starting JOrbisPlayer interface");
 
-        // Each command line argument is added to the playlist.
-        List<String> playListArgs = new ArrayList<>();
-        if (arg.length > 0) {
-            for (int i = 0; i < arg.length; i++) {
-                playListArgs.add(arg[i]);
-
-            }
-        }
-
-        JOrbisPlayerGui jOrbisPlayerFrame = new JOrbisPlayerGui(playListArgs);
+        JOrbisPlayerGui jOrbisPlayerFrame = new JOrbisPlayerGui(composePlayList(arg));
         jOrbisPlayerFrame.addWindowListener(new WindowAdapter() {
 
             @Override

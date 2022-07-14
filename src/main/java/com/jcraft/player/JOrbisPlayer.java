@@ -55,13 +55,13 @@ import com.jcraft.jorbis.Block;
 import com.jcraft.jorbis.Comment;
 import com.jcraft.jorbis.DspState;
 import com.jcraft.jorbis.Info;
-import com.jcraft.player.playlist.PlayList;
 import com.jcraft.player.playlist.PlayListHolder;
 import com.jcraft.player.playlist.PlayListUtils;
 
 /** JOrbis player. */
 public class JOrbisPlayer implements Runnable {
 
+    /** The OGG file name extension. */
     private static final String OGG_EXTENSION = ".ogg";
 
     /** Sample size, in bits. */
@@ -676,13 +676,13 @@ public class JOrbisPlayer implements Runnable {
         
         LOG.debug("Selecting source {}", item);
 
-        if (item.endsWith(PlayList.PLS_EXTENSION)) {
+        if (item.endsWith(PlayListUtils.PLS_EXTENSION)) {
             item = PlayListUtils.fetchPls(item);
             if (item == null) {
                 return null;
             }
             LOG.info("fetch: {}", item);
-        } else if (item.endsWith(PlayList.M3U_EXTENSION)) {
+        } else if (item.endsWith(PlayListUtils.M3U_EXTENSION)) {
             item = PlayListUtils.fetchM3u(item);
             if (item == null) {
                 return null;
@@ -708,8 +708,7 @@ public class JOrbisPlayer implements Runnable {
 
         if (is == null) {
             try {
-                is = new FileInputStream(System.getProperty("user.dir")
-                        + System.getProperty("file.separator") + item);
+                is = new FileInputStream(item);
             } catch (Exception ee) {
                 LOG.error("Exception while opening file", ee);
             }

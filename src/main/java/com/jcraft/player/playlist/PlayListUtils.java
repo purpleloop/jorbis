@@ -14,6 +14,12 @@ public final class PlayListUtils {
     /** Logger of the class. */
     private static final Logger LOG = LogManager.getLogger(PlayListUtils.class);
 
+    /** Extension for M3U playlist files. */
+    public static final String M3U_EXTENSION = ".m3u";
+
+    /** Extension for PLS playlist files. */
+    public static final String PLS_EXTENSION = ".pls";
+
     /** Empty constructor. */
     private PlayListUtils() {
         // Noop
@@ -119,32 +125,36 @@ public final class PlayListUtils {
     }
 
     /**
-     * Read a line froon a string.
+     * Read a line from a string.
      * 
      * @param is the stream
      * @return read line, or null
      */
     public static String readline(InputStream is) {
-        StringBuffer rtn = new StringBuffer();
-        int temp;
-        do {
-            try {
+
+        try {
+
+            StringBuilder rtn = new StringBuilder();
+            int temp;
+            do {
                 temp = is.read();
-            } catch (Exception e) {
-                return (null);
-            }
-            if (temp == -1) {
-                String str = rtn.toString();
-                if (str.length() == 0) {
-                    return (null);
+                if (temp == -1) {
+                    String str = rtn.toString();
+                    if (str.length() == 0) {
+                        return (null);
+                    }
+                    return str;
                 }
-                return str;
-            }
-            if (temp != 0 && temp != '\n' && temp != '\r') {
-                rtn.append((char) temp);
-            }
-        } while (temp != '\n' && temp != '\r');
-        return (rtn.toString());
+                if (temp != 0 && temp != '\n' && temp != '\r') {
+                    rtn.append((char) temp);
+                }
+            } while (temp != '\n' && temp != '\r');
+            return (rtn.toString());
+
+        } catch (Exception e) {
+            return (null);
+        }
+
     }
 
 }
