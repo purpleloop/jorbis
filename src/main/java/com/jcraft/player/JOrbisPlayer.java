@@ -693,20 +693,22 @@ public class JOrbisPlayer implements Runnable {
         if (!item.endsWith(OGG_EXTENSION)) {
             return null;
         }
-
-        InputStream is = null;
+        
+        InputStream is = null;     
         URLConnection urlc = null;
-        try {
-            URL url = new URL(item);
+        
+        if (item.startsWith("http://") || item.startsWith("https://")) {
+      
+            try {
+                URL url = new URL(item);
 
-            urlc = url.openConnection();
-            is = urlc.getInputStream();
+                urlc = url.openConnection();
+                is = urlc.getInputStream();
 
-        } catch (Exception ee) {
-            LOG.error("Exception while opening applet url", ee);
-        }
-
-        if (is == null) {
+            } catch (Exception ee) {
+                LOG.error("Exception while opening applet url", ee);
+            }
+        } else {
             try {
                 is = new FileInputStream(item);
             } catch (Exception ee) {
